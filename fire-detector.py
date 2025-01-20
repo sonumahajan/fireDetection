@@ -19,18 +19,7 @@ def send_mail_function():
     recipientEmail = recipientEmail.lower()
 
     try:
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.ehlo()
-        server.starttls()
-        server.login(
-            "Enter_Your_Email (System Email)", "Enter_Your_Email_Password (System Email"
-        )
-        server.sendmail(
-            "Enter_Your_Email (System Email)",
-            recipientEmail,
-            "Warning A Fire Accident has been reported on ABC Company",
-        )
-        print("sent to {}".format(recipientEmail))
+        print("send mail using smtp")
         server.close()
     except Exception as e:
         print(e)
