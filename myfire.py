@@ -1,112 +1,93 @@
 import cv2
-import numpy as np
-import smtplib
-import playsound
-import threading
-import time
+import torch
+import os
+from datetime import datetime
+from playsound import playsound  # For playing sound alerts
+import threading  # For controlling audio playback duration
 
-Alarm_Status = False
-Email_Status = False
-Fire_Reported = 0
+# Load the trained YOLOv5 model
+model = torch.hub.load(
+    "ultralytics/yolov5",
+    "custom",
+    path="\\yolov5\\runs\\train\\exp3\\weights\\best.pt",
+)  # Adjust with path to best.pt
 
+# Create the 'alert_fire' folder if it doesn't exist
+alert_folder = "alert_fire"
+if not os.path.exists(alert_folder):
+    os.makedirs(alert_folder)
 
-# Function to play the alarm sound in a separate thread
-def play_alarm_sound_function():
-    while True:
-        # playsound.playsound("alarm-sound.mp3", True)
-        playsound.playsound("alarm-sound.wav", True)
+# Path to the alert sound file
+alert_sound_path = "alarm-sound.wav"
 
+# Start webcam feed
+cap = cv2.VideoCapture(0)  # 0 is the default webcam on most systems
 
-# Function to send an email notification
-def send_mail_function():
-    recipientEmail = "Enter_Recipient_Email"  # Replace with actual email
-    recipientEmail = recipientEmail.lower()
+# Set a confidence threshold
+confidence_threshold = 0.7  # Only consider detections with confidence >= 0.7
 
-    try:
-        pass
-        # server = smtplib.SMTP("smtp.gmail.com", 587)
-        # server.ehlo()
-        # server.starttls()
-        # server.login(
-        #     "Enter_Your_Email", "Enter_Your_Email_Password"
-        # )  # Replace with actual email credentials
-        # server.sendmail(
-        #     "Enter_Your_Email",  # Replace with actual sender email
-        #     recipientEmail,
-        #     "Warning: A fire accident has been reported.",
-        # )
-        # print("Email sent to {}".format(recipientEmail))
-        # server.close()
-    except Exception as e:
-        print("Error sending email:", e)
+# Variable to track if the alert sound has been played
+alert_played = False
 
 
-# Function to detect fire using color segmentation
-def detect_fire(frame):
-    # Convert the frame to HSV color space
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-    # Define fire-like color ranges (red and yellow)
-    lower_red = np.array([0, 100, 100])
-    upper_red = np.array([10, 255, 255])
-    lower_yellow = np.array([20, 100, 100])
-    upper_yellow = np.array([35, 255, 255])
-
-    # Create masks for red and yellow colors
-    mask_red = cv2.inRange(hsv, lower_red, upper_red)
-    mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
-
-    # Combine the two masks
-    mask = cv2.bitwise_or(mask_red, mask_yellow)
-
-    return mask
+# Function to play sound for some seconds
+def play_sound_for_seconds(sound_path):
+    playsound(sound_path)
+    # Stop the sound after 2 seconds
+    threading.Timer(2.0, stop_sound).start()
 
 
-# Initialize video capture from the webcam
-video = cv2.VideoCapture(0)
+# Function to stop the sound
+def stop_sound():
+    global alert_played
+    alert_played = False  # Reset the alert flag
+
 
 while True:
-    ret, frame = video.read()
+    ret, frame = cap.read()  # Capture frame by frame
     if not ret:
         break
 
-    # Resize frame for processing
-    frame = cv2.resize(frame, (960, 540))
+    # Perform inference on the frame
+    results = model(frame)
 
-    # Apply Gaussian blur to smooth the image
-    blur = cv2.GaussianBlur(frame, (21, 21), 0)
+    # Filter out detections with low confidence
+    filtered_results = results.pandas().xyxy[0][
+        results.pandas().xyxy[0]["confidence"] >= confidence_threshold
+    ]
 
-    # Detect fire using the fire detection function
-    fire_mask = detect_fire(frame)
+    # Check if fire is detected with confidence >= threshold
+    if not filtered_results.empty and "fire" in filtered_results["name"].values:
+        # Generate a unique filename using the current timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join(alert_folder, f"fire_alert_{timestamp}.jpg")
 
-    # Count the number of non-zero (fire-like) pixels in the mask
-    fire_pixels = cv2.countNonZero(fire_mask)
+        # Render results (bounding boxes, labels, etc.)
+        rendered_frame = results.render()[0]
 
-    if fire_pixels > 15000:  # Adjust this threshold based on your environment
-        Fire_Reported += 1
+        # Save the rendered frame (with bounding boxes) as an image
+        cv2.imwrite(filename, rendered_frame)
+        print(
+            f"Fire detected with confidence >= {confidence_threshold}! Image saved as {filename}"
+        )
 
-    # Display the fire detection output
-    output = cv2.bitwise_and(frame, frame, mask=fire_mask)
-    cv2.imshow("Fire Detection", output)
-
-    # Trigger alarm and email if fire is reported
-    if Fire_Reported >= 1:
-        if not Alarm_Status:
+        # Play the alert sound if it hasn't been played already
+        if not alert_played:
             threading.Thread(
-                target=play_alarm_sound_function
-            ).start()  # Start alarm sound in a new thread
-            Alarm_Status = True
+                target=play_sound_for_seconds, args=(alert_sound_path,)
+            ).start()
+            alert_played = True  # Prevent the sound from playing repeatedly
+    else:
+        # Reset the alert flag if no fire is detected
+        alert_played = False
 
-        if not Email_Status:
-            threading.Thread(
-                target=send_mail_function
-            ).start()  # Start email notification in a new thread
-            Email_Status = True
+    # Display the resulting frame with predictions
+    cv2.imshow("Fire Detection", results.render()[0])
 
-    # Exit the program if 'q' is pressed
+    # Press 'q' to exit the video loop
     if cv2.waitKey(1) & 0xFF == ord("q"):
         break
 
-# Release the video capture and close any OpenCV windows
-video.release()
+# Release webcam and close windows
+cap.release()
 cv2.destroyAllWindows()
